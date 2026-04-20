@@ -6,8 +6,8 @@ load_dotenv()
 
 
 class Config:
-    ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
-    MODEL: str = os.getenv("MODEL", "claude-opus-4-7")
+    DASHSCOPE_API_KEY: str = os.getenv("DASHSCOPE_API_KEY", "")
+    MODEL: str = os.getenv("MODEL", "qwen-plus")
     MAX_TOKENS: int = int(os.getenv("MAX_TOKENS", "8096"))
 
     OUTPUT_DIR: Path = Path(os.getenv("OUTPUT_DIR", "output"))
@@ -19,9 +19,9 @@ class Config:
 
     @classmethod
     def validate(cls) -> None:
-        if not cls.ANTHROPIC_API_KEY:
+        if not cls.DASHSCOPE_API_KEY:
             raise ValueError(
-                "ANTHROPIC_API_KEY not set. Please set it in .env file or environment."
+                "DASHSCOPE_API_KEY not set. Please set it in .env file or environment."
             )
         cls.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         cls.TEMP_DIR.mkdir(parents=True, exist_ok=True)
