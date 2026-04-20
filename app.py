@@ -19,15 +19,15 @@ st.caption("Intelligent Presentation Auto-Generation System")
 with st.sidebar:
     st.header("Settings")
     model = st.selectbox(
-        "Claude Model",
-        ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"],
+        "Qwen Model",
+        ["qwen-plus", "qwen-turbo", "qwen-max"],
         index=0,
     )
     api_key_input = st.text_input(
-        "Anthropic API Key",
-        value=os.getenv("ANTHROPIC_API_KEY", ""),
+        "DashScope API Key",
+        value=os.getenv("DASHSCOPE_API_KEY", ""),
         type="password",
-        help="Leave empty to use ANTHROPIC_API_KEY env var",
+        help="Leave empty to use DASHSCOPE_API_KEY env var",
     )
     max_slides = st.slider("Max Slides", min_value=5, max_value=30, value=15)
 
@@ -62,13 +62,13 @@ generate_btn = st.button(
 )
 
 if generate_btn:
-    if not api_key_input and not os.getenv("ANTHROPIC_API_KEY"):
-        st.error("Please provide an Anthropic API key in the sidebar or set ANTHROPIC_API_KEY environment variable.")
+    if not api_key_input and not os.getenv("DASHSCOPE_API_KEY"):
+        st.error("Please provide a DashScope API key in the sidebar or set DASHSCOPE_API_KEY environment variable.")
         st.stop()
 
     # Override API key if provided in UI
     if api_key_input:
-        os.environ["ANTHROPIC_API_KEY"] = api_key_input
+        os.environ["DASHSCOPE_API_KEY"] = api_key_input
 
     progress_bar = st.progress(0, text="Initializing...")
     status = st.empty()
