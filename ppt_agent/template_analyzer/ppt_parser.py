@@ -21,13 +21,14 @@ _PLACEHOLDER_TYPE_NAMES = {
     2: "body",
     3: "center_title",
     4: "subtitle",
+    7: "object",       # Content/Object placeholder (used for bullets)
     10: "date",
     11: "footer",
     12: "slide_number",
-    13: "title",        # PP_PLACEHOLDER.TITLE (some pptx versions use 13)
-    14: "subtitle",
-    15: "title",        # PP_PLACEHOLDER.TITLE (python-pptx enum value)
-    16: "chart",
+    13: "slide_number",
+    14: "media",
+    15: "footer",      # Some layouts use 15 for footer
+    16: "date",        # Some layouts use 16 for date
     18: "picture",
     19: "bitmap",
 }
@@ -134,28 +135,31 @@ def _parse_slide(slide, slide_index: int, slide_width: int, slide_height: int) -
     }
 
 
+_CONTENT_PH_TYPES = {"title", "center_title", "subtitle", "body", "object"}
+_SYSTEM_PH_TYPES = {"date", "footer", "slide_number", "media"}
+
+
 def _classify_layout(placeholders: list[dict]) -> str:
     """Classify layout type based on placeholder arrangement."""
     types = {p["type"] for p in placeholders}
-    ph_count = len(placeholders)
+    content_phs = [p for p in placeholders if p["type"] in _CONTENT_PH_TYPES]
 
     if "center_title" in types:
         return "title_slide"
-    if "title" in types and ph_count == 1:
+    if "title" in types and len(content_phs) == 1:
         return "section_header"
     if "title" in types and ("picture" in types or "bitmap" in types):
         if any(p["position"]["left"] < 0.45 for p in placeholders if p["type"] in ("picture", "bitmap")):
             return "image_left"
         return "image_right"
-    if "title" in types and "body" in types:
-        # Check if it looks like two-column
-        body_phs = [p for p in placeholders if p["type"] == "body"]
+    if "title" in types and ("body" in types or "object" in types):
+        body_phs = [p for p in placeholders if p["type"] in ("body", "object")]
         if len(body_phs) >= 2:
             return "two_column"
         return "content"
     if "picture" in types and "title" not in types:
         return "image_only"
-    if ph_count == 0:
+    if len(content_phs) == 0:
         return "blank"
     return "content"
 

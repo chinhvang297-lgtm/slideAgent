@@ -156,9 +156,9 @@ def _format_template_schema(schema: dict[str, Any]) -> str:
         for ph in group.get("placeholders", []):
             ph_type = str(ph.get("type", "")).upper()
             hint = ""
-            if any(t in ph_type for t in ("TITLE", "CENTER")):
+            if any(t in ph_type for t in ("TITLE", "CENTER", "title", "center")):
                 hint = "  ← PUT SLIDE TITLE HERE (content_type='title')"
-            elif any(t in ph_type for t in ("BODY", "OBJECT", "CONTENT")):
+            elif any(t in ph_type for t in ("BODY", "OBJECT", "CONTENT", "body", "object", "subtitle")):
                 hint = "  ← PUT BULLETS/TEXT HERE (content_type='bullet_list' or 'text')"
             elif "PICTURE" in ph_type or "PIC" in ph_type:
                 hint = "  ← PUT IMAGE HERE (content_type='image')"
