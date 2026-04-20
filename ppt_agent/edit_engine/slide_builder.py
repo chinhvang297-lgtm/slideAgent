@@ -175,6 +175,11 @@ def _populate_slide(
             if ph_format:
                 ph_map[ph_format.idx] = shape
 
+    # Clear ALL text placeholders first — removes "First bullet point..." template text
+    for shape in ph_map.values():
+        if shape.has_text_frame:
+            replace_span(shape, "")
+
     # Always force-set the title from slide_spec["title"] so every slide has unique text.
     # Only skip if a content_block explicitly targets this same placeholder.
     title_text = slide_spec.get("title", "")
