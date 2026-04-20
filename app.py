@@ -23,7 +23,7 @@ with st.sidebar:
     st.header("Settings")
     model = st.selectbox(
         "Qwen Model",
-        ["qwen-plus", "qwen-turbo", "qwen-max"],
+        ["qwen3.6-max-preview", "qwen-max", "qwen-turbo", "qwen-plus"],
         index=0,
     )
     api_key_input = st.text_input(

@@ -35,12 +35,7 @@ async def plan_slides_async(
     progress_callback=None,
 ) -> dict[str, Any]:
     """
-    Use Qwen with tool use to plan the slide layout.
-
-    Qwen is accessed via OpenAI-compatible endpoint (DashScope).
-
-    Returns:
-        dict with 'slides' key containing list of slide plans
+    Use Qwen with streaming + thinking to plan the slide layout.
     """
     config.validate()
 
@@ -52,16 +47,16 @@ async def plan_slides_async(
 
     logger.info(f"Planning slides with model: {config.MODEL}")
     if progress_callback:
-        progress_callback(f"Sending to {config.MODEL} for slide planning...")
+        progress_callback(f"Stage 3: Sending to {config.MODEL} for slide planning (deep thinking)...")
 
-    response = await client.chat.completions.create(
+    stream = await client.chat.completions.create(
         model=config.MODEL,
         max_tokens=config.MAX_TOKENS,
         tools=[{
             "type": "function",
             "function": {
                 "name": CREATE_SLIDE_PLAN_TOOL["name"],
-                "description": "Create a complete slide plan for the presentation.",
+                "description": "Create a complete, unique slide plan for the presentation.",
                 "parameters": CREATE_SLIDE_PLAN_TOOL["input_schema"],
             },
         }],
@@ -72,44 +67,59 @@ async def plan_slides_async(
                 "role": "user",
                 "content": (
                     f"{template_desc}\n\n"
-                    f"Now create a slide plan for this content:\n\n{content_desc}\n\n"
+                    f"Create a slide plan for this content:\n\n{content_desc}\n\n"
                     f"Maximum slides: {config.MAX_SLIDES}. "
-                    "Call the create_slide_plan tool with your complete plan."
+                    "Cover ALL sections. Every slide must have unique content. "
+                    "Call create_slide_plan with the complete plan."
                 ),
             },
         ],
+        stream=True,
+        extra_body={"enable_thinking": True},
     )
 
-    # Log token usage
-    usage = response.usage
-    if usage:
-        logger.info(
-            f"Tokens: input={usage.prompt_tokens}, output={usage.completion_tokens}"
-        )
+    # Accumulate streamed tool call chunks
+    tool_args_by_idx: dict[int, str] = {}
+    content_text = ""
 
-    # Extract tool call result
-    slide_plan = _extract_slide_plan(response)
+    async for chunk in stream:
+        if not chunk.choices:
+            continue
+        delta = chunk.choices[0].delta
+
+        if delta.tool_calls:
+            for tc in delta.tool_calls:
+                idx = getattr(tc, "index", 0)
+                if idx not in tool_args_by_idx:
+                    tool_args_by_idx[idx] = ""
+                if tc.function and tc.function.arguments:
+                    tool_args_by_idx[idx] += tc.function.arguments
+
+        if delta.content:
+            content_text += delta.content
+
+    # Parse plan
+    slide_plan: dict[str, Any] = {"slides": []}
+    if tool_args_by_idx:
+        try:
+            slide_plan = json.loads(tool_args_by_idx[0])
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.warning(f"Failed to parse tool call arguments: {e}")
+            slide_plan = _extract_from_text(content_text)
+    else:
+        slide_plan = _extract_from_text(content_text)
+
     slide_plan = _normalize_slide_plan(slide_plan, template_schema)
 
+    n = len(slide_plan.get("slides", []))
     if progress_callback:
-        progress_callback(f"Plan created: {len(slide_plan.get('slides', []))} slides")
-
-    logger.info(f"Slide plan created: {len(slide_plan.get('slides', []))} slides")
+        progress_callback(f"Plan created: {n} slides")
+    logger.info(f"Slide plan created: {n} slides")
     return slide_plan
 
 
-def _extract_slide_plan(response) -> dict[str, Any]:
-    """Extract the slide plan from the Qwen tool call response."""
-    msg = response.choices[0].message
-
-    if msg.tool_calls:
-        try:
-            return json.loads(msg.tool_calls[0].function.arguments)
-        except (json.JSONDecodeError, IndexError) as e:
-            logger.warning(f"Failed to parse tool call arguments: {e}")
-
-    # Fallback: try to extract JSON from text content
-    text = msg.content or ""
+def _extract_from_text(text: str) -> dict[str, Any]:
+    """Try to extract a JSON slide plan from raw text content."""
     start = text.find("{")
     end = text.rfind("}") + 1
     if start >= 0 and end > start:
@@ -117,8 +127,7 @@ def _extract_slide_plan(response) -> dict[str, Any]:
             return json.loads(text[start:end])
         except json.JSONDecodeError:
             pass
-
-    logger.warning("No tool_call found in response, returning empty plan")
+    logger.warning("No slide plan found in response, returning empty plan")
     return {"slides": []}
 
 
@@ -145,7 +154,7 @@ def _normalize_slide_plan(
 
         group_id = slide.get("layout_group_id", default_group_id)
         if group_id not in layout_groups:
-            logger.debug(f"Slide {i+1}: invalid layout_group_id {group_id}, using default")
+            logger.debug(f"Slide {i+1}: invalid layout_group_id {group_id!r}, using default")
             group_id = default_group_id
         slide["layout_group_id"] = group_id
 
@@ -154,8 +163,16 @@ def _normalize_slide_plan(
         for block in slide.get("content_blocks", []):
             ph_idx = block.get("placeholder_idx", 0)
             if ph_idx not in valid_phs and valid_phs:
-                ph_idx = min(valid_phs)
+                # Try to find the best matching placeholder by content type
+                content_type = block.get("content_type", "text")
+                if content_type == "title":
+                    ph_idx = min(valid_phs)  # title is usually the lowest idx
+                else:
+                    # Use the second-lowest idx for body content, or min if only one
+                    sorted_phs = sorted(valid_phs)
+                    ph_idx = sorted_phs[1] if len(sorted_phs) > 1 else sorted_phs[0]
                 block["placeholder_idx"] = ph_idx
+                logger.debug(f"Slide {i+1}: remapped block to placeholder_idx={ph_idx}")
             validated_blocks.append(block)
 
         slide["content_blocks"] = validated_blocks
