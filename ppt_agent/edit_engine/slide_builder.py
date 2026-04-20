@@ -65,29 +65,41 @@ def build_presentation(
     total_slides = len(slide_plan.get("slides", []))
     all_issues = []
 
+    # Find a fallback content group for safety (never clone section/title slides for body slides)
+    content_group = next(
+        (g for g in layout_groups.values() if g.get("layout_type") == "content"),
+        next(iter(layout_groups.values())) if layout_groups else None,
+    )
+
     for i, slide_spec in enumerate(slide_plan.get("slides", [])):
         if progress_callback:
             progress_callback(f"Building slide {i+1}/{total_slides}: {slide_spec.get('title', '')}")
 
-        # Get template slide to clone
         group_id = slide_spec.get("layout_group_id", 0)
         group = layout_groups.get(group_id)
 
         if group is None:
-            group = next(iter(layout_groups.values())) if layout_groups else None
+            group = content_group
+
+        # Safety: slides after the first should never clone a section_header or title_slide
+        # (they have distinct backgrounds like orange that would bleed into every content slide)
+        if i > 0 and group and group.get("layout_type") in ("section_header", "title_slide"):
+            group = content_group
 
         template_slide_idx = group["representative_index"] if group else 0
         template_slide_idx = min(template_slide_idx, len(prs.slides) - 1)
 
-        # Clone and populate slide
+        logger.debug(
+            f"  Slide {i+1}: '{slide_spec.get('title', '')}' "
+            f"group={group_id} ({group.get('layout_type','?') if group else '?'}) "
+            f"template_idx={template_slide_idx}"
+        )
+
         new_slide = _clone_slide(prs, new_prs, template_slide_idx)
         _populate_slide(new_slide, slide_spec, slide_width, slide_height)
 
-        # Validate
         issues = validate_page(new_slide, i)
         all_issues.extend(issues)
-
-        logger.debug(f"  Slide {i+1}: {slide_spec.get('title', '')} (layout group {group_id})")
 
     if all_issues:
         logger.warning(f"Validation found {len(all_issues)} issues")

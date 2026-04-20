@@ -24,7 +24,9 @@ _PLACEHOLDER_TYPE_NAMES = {
     10: "date",
     11: "footer",
     12: "slide_number",
-    15: "table",
+    13: "title",        # PP_PLACEHOLDER.TITLE (some pptx versions use 13)
+    14: "subtitle",
+    15: "title",        # PP_PLACEHOLDER.TITLE (python-pptx enum value)
     16: "chart",
     18: "picture",
     19: "bitmap",
