@@ -3,33 +3,60 @@
 import json
 from typing import Any
 
-SYSTEM_PROMPT = """You are an expert presentation designer with deep knowledge of visual communication and information architecture. Your task is to create professional PowerPoint presentations from document content using provided template layouts.
+SYSTEM_PROMPT = """You are an expert PowerPoint presentation designer. Your job is to create a \
+detailed, content-rich slide plan from a document using a specific template.
 
-You will receive:
-1. A template schema describing available slide layouts and their placeholders
-2. Structured content to present (from PDF or Markdown)
+## ABSOLUTE RULES — NEVER VIOLATE
 
-Your responsibilities:
-- Map content sections to the most appropriate template layout
-- Distribute content logically across slides (avoid overcrowding)
-- Maintain narrative flow and logical progression
-- Respect placeholder types (title, body, image, etc.)
-- Generate concise, presentation-ready text (not prose — use bullet points where appropriate)
-- Suggest where images should appear when available
+1. **Every slide MUST have UNIQUE content** — never repeat the same text on multiple slides
+2. **Cover ALL document sections** — distribute the full document across slides
+3. **Always include the title in content_blocks** — add a block with placeholder_idx=0 and \
+content_type="title" on EVERY slide
+4. **Use EXACT placeholder_idx values** from the template schema — do not invent new ones
+5. **Fill ALL available placeholders** on each slide (at minimum: title + body)
+6. **3–5 bullet points per slide** for bullet_list type — concise, presentation-ready
+7. **Never exceed 120 words per slide** total
 
-Guidelines:
-- Title slides: Use only for the very first slide
-- Section headers: Use to separate major topics
-- Content slides: 3-5 bullet points maximum per slide
-- Image slides: Use when the content section has associated images
-- Never exceed 120 words of text per slide
-- Prefer multiple focused slides over one overcrowded slide"""
+## PLACEHOLDER MAPPING RULE
+
+- `idx=0` → title placeholder → always `content_type="title"`
+- `idx=1` → main body/content placeholder → `content_type="bullet_list"` or `"text"`
+- Higher `idx` → additional placeholders (captions, subtitles, etc.)
+
+## EXAMPLE — correct slide entry
+
+```json
+{
+  "slide_number": 2,
+  "layout_group_id": 1,
+  "title": "Q3 Revenue Growth",
+  "content_blocks": [
+    {"placeholder_idx": 0, "content_type": "title", "text": "Q3 Revenue Growth"},
+    {"placeholder_idx": 1, "content_type": "bullet_list", "bullet_points": [
+      "Revenue reached $2.4M, up 34% year-over-year",
+      "Enterprise segment grew 48% this quarter",
+      "3 new Fortune 500 clients onboarded"
+    ]}
+  ],
+  "speaker_notes": "Emphasize enterprise growth as the key driver"
+}
+```
+
+## SLIDE STRUCTURE GUIDE
+
+- **Slide 1**: Title slide — presentation title + subtitle
+- **Slides 2–N**: One slide per major section or sub-topic
+  - Section header slides: use a simple layout for major topic transitions
+  - Content slides: 3–5 bullets from that section's key points
+- **Do NOT** put all content on 1–2 slides and leave others empty"""
+
 
 CREATE_SLIDE_PLAN_TOOL = {
     "name": "create_slide_plan",
     "description": (
         "Create a detailed, complete plan for the PowerPoint presentation. "
-        "Call this tool ONCE with the full plan for all slides."
+        "Call this tool ONCE with the full plan for ALL slides. "
+        "Every slide must have unique content from a different part of the document."
     ),
     "input_schema": {
         "type": "object",
@@ -37,58 +64,60 @@ CREATE_SLIDE_PLAN_TOOL = {
         "properties": {
             "slides": {
                 "type": "array",
-                "description": "Complete list of slides in order",
+                "description": "Complete ordered list of slides — must cover the entire document",
                 "items": {
                     "type": "object",
-                    "required": ["slide_number", "layout_group_id", "title"],
+                    "required": ["slide_number", "layout_group_id", "title", "content_blocks"],
                     "properties": {
                         "slide_number": {
                             "type": "integer",
-                            "description": "1-based slide number in the output presentation",
+                            "description": "1-based slide number",
                         },
                         "layout_group_id": {
                             "type": "integer",
-                            "description": "ID of the template layout group to use for this slide",
+                            "description": "ID of the template layout group to use",
                         },
                         "title": {
                             "type": "string",
-                            "description": "Slide title text",
+                            "description": "Slide title — must be unique per slide",
                         },
                         "content_blocks": {
                             "type": "array",
-                            "description": "Content to place in each placeholder",
+                            "description": (
+                                "Content for each placeholder. MUST include idx=0 (title) "
+                                "and idx=1 (body) blocks on every slide."
+                            ),
                             "items": {
                                 "type": "object",
                                 "required": ["placeholder_idx", "content_type"],
                                 "properties": {
                                     "placeholder_idx": {
                                         "type": "integer",
-                                        "description": "Index (idx) of the placeholder to fill",
+                                        "description": "Exact idx from template schema",
                                     },
                                     "content_type": {
                                         "type": "string",
                                         "enum": ["title", "text", "bullet_list", "image"],
-                                        "description": "Type of content for this placeholder",
                                     },
                                     "text": {
                                         "type": "string",
-                                        "description": "Text content (for title/text types)",
+                                        "description": "Text for title/text types",
                                     },
                                     "bullet_points": {
                                         "type": "array",
                                         "items": {"type": "string"},
-                                        "description": "Bullet point items (for bullet_list type)",
+                                        "description": "3–5 bullet points for bullet_list type",
                                     },
                                     "image_path": {
                                         "type": "string",
-                                        "description": "Path to image file (for image type)",
+                                        "description": "Path to image (for image type only)",
                                     },
                                 },
                             },
                         },
                         "speaker_notes": {
                             "type": "string",
-                            "description": "Optional speaker notes for this slide",
+                            "description": "Optional speaker notes",
                         },
                     },
                 },
@@ -102,112 +131,82 @@ def build_planning_prompt(
     template_schema: dict[str, Any],
     structured_content: dict[str, Any],
 ) -> tuple[str, str]:
-    """
-    Build the user message for the LLM planner.
-
-    Returns:
-        Tuple of (template_description, content_description) to be passed
-        as separate message blocks with different cache_control settings.
-    """
     template_desc = _format_template_schema(template_schema)
     content_desc = _format_structured_content(structured_content)
     return template_desc, content_desc
 
 
 def _format_template_schema(schema: dict[str, Any]) -> str:
-    """Format template schema as a concise description for the LLM."""
     lines = [
         "## TEMPLATE SCHEMA",
-        f"Template: {schema.get('slide_count', 0)} slides",
-        f"Dimensions: {schema.get('slide_dimensions', {}).get('width_pt', 960)}pt × {schema.get('slide_dimensions', {}).get('height_pt', 540)}pt",
+        f"Source template: {schema.get('slide_count', 0)} slides, "
+        f"{schema.get('slide_dimensions', {}).get('width_pt', 960)}×"
+        f"{schema.get('slide_dimensions', {}).get('height_pt', 540)}pt",
         "",
-        "### Available Layout Groups:",
+        "### Available Layout Groups",
+        "⚠️  Use these EXACT group_id and placeholder_idx values in your plan:",
     ]
 
     for group in schema.get("layout_groups", []):
-        lines.append(f"\n**Layout Group {group['group_id']}: {group['layout_type']}**")
-        lines.append(f"  Description: {group.get('description', '')}")
-        lines.append(f"  Used in slides: {group.get('slide_indices', [])}")
-        lines.append("  Placeholders:")
+        lines.append(f"\n**Group {group['group_id']}: {group['layout_type']}**")
+        if group.get("description"):
+            lines.append(f"  Purpose: {group['description']}")
+        lines.append(f"  Example slides: {group.get('slide_indices', [])}")
+        lines.append("  Placeholders (use these exact idx values):")
         for ph in group.get("placeholders", []):
+            ph_type = str(ph.get("type", "")).upper()
+            hint = ""
+            if any(t in ph_type for t in ("TITLE", "CENTER")):
+                hint = "  ← PUT SLIDE TITLE HERE (content_type='title')"
+            elif any(t in ph_type for t in ("BODY", "OBJECT", "CONTENT")):
+                hint = "  ← PUT BULLETS/TEXT HERE (content_type='bullet_list' or 'text')"
+            elif "PICTURE" in ph_type or "PIC" in ph_type:
+                hint = "  ← PUT IMAGE HERE (content_type='image')"
+            elif "SUBTITLE" in ph_type:
+                hint = "  ← PUT SUBTITLE HERE (content_type='text')"
             pos = ph.get("position", {})
             lines.append(
-                f"    - idx={ph['idx']} type={ph['type']} "
-                f"at ({pos.get('left', 0):.2f}, {pos.get('top', 0):.2f}) "
-                f"size {pos.get('width', 0):.2f}×{pos.get('height', 0):.2f}"
+                f"    placeholder_idx={ph['idx']}  type={ph['type']}{hint}"
+                f"  (pos: {pos.get('left', 0):.0f},{pos.get('top', 0):.0f} "
+                f"size: {pos.get('width', 0):.0f}×{pos.get('height', 0):.0f})"
             )
-
-    color_scheme = schema.get("color_scheme", {})
-    font_scheme = schema.get("font_scheme", {})
-    lines.append(f"\nColor scheme: primary={color_scheme.get('primary')}, secondary={color_scheme.get('secondary')}")
-    lines.append(f"Font scheme: heading={font_scheme.get('heading')}, body={font_scheme.get('body')}")
 
     return "\n".join(lines)
 
 
 def _format_structured_content(content: dict[str, Any]) -> str:
-    """Format structured content as a concise description for the LLM."""
     lines = [
-        "## CONTENT TO PRESENT",
-        f"Document Title: {content.get('title', 'Untitled')}",
-        f"Source: {content.get('source_type', 'unknown')}",
-        f"Total sections: {len(content.get('sections', []))}",
+        "## DOCUMENT CONTENT",
+        f"Title: {content.get('title', 'Untitled')}",
+        f"Sections: {len(content.get('sections', []))}",
         "",
-        "### Sections:",
+        "### Full Content (create slides covering ALL sections below):",
     ]
 
-    for i, section in enumerate(content.get("sections", [])):
-        lines.append(f"\n**Section {i + 1}: {section.get('title', '')}**")
-        for item in section.get("content", [])[:5]:  # Limit preview
-            item_type = item.get("type", "")
-            if item_type == "text":
-                text = item.get("text", "")[:200]
-                lines.append(f"  [Text] {text}{'...' if len(item.get('text', '')) > 200 else ''}")
-            elif item_type == "bullet_list":
-                items = item.get("items", [])[:5]
-                for bullet in items:
-                    lines.append(f"  • {bullet}")
-                if len(item.get("items", [])) > 5:
-                    lines.append(f"  ... ({len(item.get('items', []))} total bullets)")
-            elif item_type == "image":
-                lines.append(f"  [Image] {item.get('path', '')}")
-            elif item_type == "subheading":
-                lines.append(f"  [Subheading] {item.get('text', '')}")
-
-        linked_images = section.get("linked_images", [])
-        if linked_images:
-            lines.append(f"  [Has {len(linked_images)} linked image(s)]")
-
-    # Include ALL content as JSON for precise planning
-    lines.append("\n### Full Content (JSON):")
-    # Truncate to avoid huge context
     content_for_llm = _truncate_content(content)
     lines.append(json.dumps(content_for_llm, ensure_ascii=False, indent=2))
 
     return "\n".join(lines)
 
 
-def _truncate_content(content: dict[str, Any], max_chars: int = 30000) -> dict[str, Any]:
-    """Truncate content to fit within LLM context."""
+def _truncate_content(content: dict[str, Any], max_chars: int = 40000) -> dict[str, Any]:
+    """Truncate content to fit within LLM context while preserving section structure."""
     import copy
     content_copy = copy.deepcopy(content)
 
-    # Truncate long text blocks
+    # First pass: truncate individual long text blocks
     for section in content_copy.get("sections", []):
         for item in section.get("content", []):
-            if item.get("type") == "text" and len(item.get("text", "")) > 500:
-                item["text"] = item["text"][:500] + "..."
-            elif item.get("type") == "bullet_list":
-                item["items"] = item["items"][:10]
+            if item.get("type") == "text" and len(item.get("text", "")) > 800:
+                item["text"] = item["text"][:800] + "..."
+            elif item.get("type") == "bullet_list" and len(item.get("items", [])) > 12:
+                item["items"] = item["items"][:12]
 
-    # Check total size and truncate sections if needed
-    serialized = json.dumps(content_copy, ensure_ascii=False)
-    if len(serialized) > max_chars:
-        # Keep first N sections
-        sections = content_copy.get("sections", [])
-        while len(json.dumps(content_copy, ensure_ascii=False)) > max_chars and sections:
-            sections.pop()
+    # Second pass: if still too large, truncate sections from the back
+    sections = content_copy.get("sections", [])
+    while len(json.dumps(content_copy, ensure_ascii=False)) > max_chars and len(sections) > 2:
+        sections.pop()
         content_copy["sections"] = sections
-        content_copy["_truncated"] = True
+        content_copy["_note"] = "Content truncated — plan slides for all shown sections"
 
     return content_copy

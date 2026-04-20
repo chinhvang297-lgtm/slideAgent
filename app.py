@@ -23,7 +23,7 @@ with st.sidebar:
     st.header("Settings")
     model = st.selectbox(
         "Qwen Model",
-        ["qwen-plus", "qwen-turbo", "qwen-max"],
+        ["qwen3.6-max-preview", "qwen-max", "qwen-turbo", "qwen-plus"],
         index=0,
     )
     api_key_input = st.text_input(
@@ -84,17 +84,17 @@ if generate_btn:
             st.text("\n".join(log_lines[-20:]))
 
     stage_progress = {"1": 0.15, "2": 0.30, "3": 0.80, "4": 0.95}
+    current_progress = [0.0]
 
     def progress_callback(msg: str) -> None:
         update_log(msg)
         for stage, pct in stage_progress.items():
             if f"Stage {stage}" in msg:
+                current_progress[0] = pct
                 progress_bar.progress(pct, text=msg)
                 return
-        progress_bar.progress(
-            min(progress_bar._value + 0.02, 0.94) if hasattr(progress_bar, "_value") else 0.5,
-            text=msg,
-        )
+        current_progress[0] = min(current_progress[0] + 0.02, 0.94)
+        progress_bar.progress(current_progress[0], text=msg)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir = Path(tmpdir)

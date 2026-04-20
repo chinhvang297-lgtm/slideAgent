@@ -143,6 +143,21 @@ def _clone_slide(source_prs: Presentation, target_prs: Presentation, slide_index
     return new_slide
 
 
+def _find_title_placeholder(slide, ph_map: dict):
+    """Return the title placeholder shape (CENTER_TITLE, TITLE type, or idx=0)."""
+    for shape in slide.shapes:
+        if shape.is_placeholder and shape.has_text_frame:
+            ph_fmt = shape.placeholder_format
+            if ph_fmt:
+                try:
+                    # PP_PLACEHOLDER.CENTER_TITLE=3, PP_PLACEHOLDER.TITLE=15 (int values)
+                    if int(ph_fmt.type) in (3, 15):
+                        return shape
+                except Exception:
+                    pass
+    return ph_map.get(0)
+
+
 def _populate_slide(
     slide,
     slide_spec: dict[str, Any],
@@ -159,6 +174,17 @@ def _populate_slide(
             ph_format = shape.placeholder_format
             if ph_format:
                 ph_map[ph_format.idx] = shape
+
+    # Always force-set the title from slide_spec["title"] so every slide has unique text.
+    # Only skip if a content_block explicitly targets this same placeholder.
+    title_text = slide_spec.get("title", "")
+    blocks_ph_idxs = {b.get("placeholder_idx") for b in content_blocks}
+    if title_text:
+        title_shape = _find_title_placeholder(slide, ph_map)
+        if title_shape is not None:
+            title_idx = title_shape.placeholder_format.idx if title_shape.placeholder_format else 0
+            if title_idx not in blocks_ph_idxs and title_shape.has_text_frame:
+                replace_span(title_shape, title_text)
 
     for block in content_blocks:
         ph_idx = block.get("placeholder_idx", 0)

@@ -7,8 +7,8 @@ load_dotenv()
 
 class Config:
     DASHSCOPE_API_KEY: str = os.getenv("DASHSCOPE_API_KEY", "")
-    MODEL: str = os.getenv("MODEL", "qwen-plus")
-    MAX_TOKENS: int = int(os.getenv("MAX_TOKENS", "8096"))
+    MODEL: str = os.getenv("MODEL", "qwen3.6-max-preview")
+    MAX_TOKENS: int = int(os.getenv("MAX_TOKENS", "16000"))
 
     OUTPUT_DIR: Path = Path(os.getenv("OUTPUT_DIR", "output"))
     TEMP_DIR: Path = Path(os.getenv("TEMP_DIR", "temp"))
