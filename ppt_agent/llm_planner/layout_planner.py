@@ -49,18 +49,13 @@ async def plan_slides_async(
     if progress_callback:
         progress_callback(f"Stage 3: Sending to {config.MODEL} for slide planning (deep thinking)...")
 
+    # qwen3.6-max-preview with enable_thinking does not support tool_choice.
+    # Ask the model to output JSON directly and parse it from the streamed content.
+    json_schema = json.dumps(CREATE_SLIDE_PLAN_TOOL["input_schema"], ensure_ascii=False, indent=2)
+
     stream = await client.chat.completions.create(
         model=config.MODEL,
         max_tokens=config.MAX_TOKENS,
-        tools=[{
-            "type": "function",
-            "function": {
-                "name": CREATE_SLIDE_PLAN_TOOL["name"],
-                "description": "Create a complete, unique slide plan for the presentation.",
-                "parameters": CREATE_SLIDE_PLAN_TOOL["input_schema"],
-            },
-        }],
-        tool_choice={"type": "function", "function": {"name": "create_slide_plan"}},
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {
@@ -69,8 +64,10 @@ async def plan_slides_async(
                     f"{template_desc}\n\n"
                     f"Create a slide plan for this content:\n\n{content_desc}\n\n"
                     f"Maximum slides: {config.MAX_SLIDES}. "
-                    "Cover ALL sections. Every slide must have unique content. "
-                    "Call create_slide_plan with the complete plan."
+                    "Cover ALL sections. Every slide must have unique content.\n\n"
+                    "Output ONLY a valid JSON object matching this schema — "
+                    "no markdown fences, no explanation, just the raw JSON:\n"
+                    f"{json_schema}"
                 ),
             },
         ],
@@ -78,36 +75,16 @@ async def plan_slides_async(
         extra_body={"enable_thinking": True},
     )
 
-    # Accumulate streamed tool call chunks
-    tool_args_by_idx: dict[int, str] = {}
     content_text = ""
 
     async for chunk in stream:
         if not chunk.choices:
             continue
         delta = chunk.choices[0].delta
-
-        if delta.tool_calls:
-            for tc in delta.tool_calls:
-                idx = getattr(tc, "index", 0)
-                if idx not in tool_args_by_idx:
-                    tool_args_by_idx[idx] = ""
-                if tc.function and tc.function.arguments:
-                    tool_args_by_idx[idx] += tc.function.arguments
-
         if delta.content:
             content_text += delta.content
 
-    # Parse plan
-    slide_plan: dict[str, Any] = {"slides": []}
-    if tool_args_by_idx:
-        try:
-            slide_plan = json.loads(tool_args_by_idx[0])
-        except (json.JSONDecodeError, KeyError) as e:
-            logger.warning(f"Failed to parse tool call arguments: {e}")
-            slide_plan = _extract_from_text(content_text)
-    else:
-        slide_plan = _extract_from_text(content_text)
+    slide_plan = _extract_from_text(content_text)
 
     slide_plan = _normalize_slide_plan(slide_plan, template_schema)
 
