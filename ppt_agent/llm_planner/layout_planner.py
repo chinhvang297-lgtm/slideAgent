@@ -84,7 +84,11 @@ async def plan_slides_async(
         if delta.content:
             content_text += delta.content
 
+    logger.debug(f"LLM raw response ({len(content_text)} chars):\n{content_text[:2000]}")
     slide_plan = _extract_from_text(content_text)
+
+    if not slide_plan.get("slides"):
+        logger.warning(f"Empty slide plan! Full LLM response:\n{content_text}")
 
     slide_plan = _normalize_slide_plan(slide_plan, template_schema)
 

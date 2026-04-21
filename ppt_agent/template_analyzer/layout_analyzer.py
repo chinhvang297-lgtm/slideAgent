@@ -1,113 +1,53 @@
-"""Layout analyzer: groups similar slide layouts using clustering."""
+"""Layout analyzer: groups similar slide layouts by semantic layout type."""
 
 from typing import Any
-
-import numpy as np
 
 from ..utils import get_logger
 
 logger = get_logger(__name__)
 
-
-def _slide_to_feature_vector(slide: dict[str, Any]) -> list[float]:
-    """Convert a slide's placeholder layout to a feature vector for clustering."""
-    features = [0.0] * 12
-
-    placeholders = slide.get("placeholders", [])
-    for ph in placeholders:
-        pos = ph.get("position", {})
-        ph_type = ph.get("type", "")
-
-        if ph_type in ("title", "center_title"):
-            features[0] = pos.get("left", 0)
-            features[1] = pos.get("top", 0)
-            features[2] = pos.get("width", 0)
-            features[3] = pos.get("height", 0)
-        elif ph_type in ("body", "subtitle"):
-            features[4] = pos.get("left", 0)
-            features[5] = pos.get("top", 0)
-            features[6] = pos.get("width", 0)
-            features[7] = pos.get("height", 0)
-        elif ph_type in ("picture", "bitmap"):
-            features[8] = pos.get("left", 0)
-            features[9] = pos.get("top", 0)
-
-    features[10] = 1.0 if slide.get("has_images") else 0.0
-    features[11] = len(placeholders) / 10.0  # normalized placeholder count
-    return features
+# Layout types ordered by usefulness for content (content slides first)
+_LAYOUT_PRIORITY = [
+    "content", "two_column", "image_right", "image_left",
+    "title_slide", "section_header", "image_only", "blank",
+]
 
 
 def analyze_layouts(slides: list[dict[str, Any]], max_clusters: int = 6) -> list[dict[str, Any]]:
     """
-    Group slides into layout clusters using K-means.
+    Group slides by their semantic layout_type.
 
-    Returns list of layout groups with representative slide indices.
+    Replaces K-means clustering which was merging section_header and content
+    slides into the same group (causing orange section-header backgrounds to
+    bleed into every generated content slide).
     """
     if not slides:
         return []
 
-    # Build feature matrix
-    feature_vectors = [_slide_to_feature_vector(s) for s in slides]
-    X = np.array(feature_vectors)
+    # Bucket slide indices by layout_type
+    buckets: dict[str, list[int]] = {}
+    for i, slide in enumerate(slides):
+        lt = slide.get("layout_type", "content")
+        buckets.setdefault(lt, []).append(i)
 
-    # Determine optimal number of clusters
-    n_slides = len(slides)
-    n_clusters = min(max_clusters, n_slides)
+    # Sort groups: content-like layouts first so group_id=0 is always usable for body slides
+    ordered_types = sorted(
+        buckets.keys(),
+        key=lambda x: _LAYOUT_PRIORITY.index(x) if x in _LAYOUT_PRIORITY else 99,
+    )
 
-    if n_clusters <= 1:
-        return [_make_layout_group(0, list(range(n_slides)), slides)]
+    layout_groups = []
+    for gid, lt in enumerate(ordered_types):
+        group = _make_layout_group(gid, buckets[lt], slides)
+        layout_groups.append(group)
 
-    try:
-        from sklearn.cluster import KMeans
-        from sklearn.preprocessing import StandardScaler
-
-        scaler = StandardScaler()
-        X_scaled = scaler.fit_transform(X)
-
-        # Find best k using inertia elbow
-        best_k = _find_best_k(X_scaled, n_clusters)
-        kmeans = KMeans(n_clusters=best_k, random_state=42, n_init=10)
-        labels = kmeans.fit_predict(X_scaled)
-
-        # Build layout groups
-        groups: dict[int, list[int]] = {}
-        for slide_idx, label in enumerate(labels):
-            groups.setdefault(int(label), []).append(slide_idx)
-
-        layout_groups = []
-        for group_id, slide_indices in sorted(groups.items()):
-            group = _make_layout_group(group_id, slide_indices, slides)
-            layout_groups.append(group)
-
-        logger.info(f"Found {len(layout_groups)} layout groups from {n_slides} slides")
-        return layout_groups
-
-    except ImportError:
-        # Fallback: group by layout_type string
-        return _group_by_layout_type(slides)
-
-
-def _find_best_k(X: np.ndarray, max_k: int) -> int:
-    """Simple elbow method to find optimal k."""
-    from sklearn.cluster import KMeans
-
-    if max_k <= 2:
-        return max_k
-
-    inertias = []
-    k_range = range(1, min(max_k + 1, len(X) + 1))
-    for k in k_range:
-        km = KMeans(n_clusters=k, random_state=42, n_init=5)
-        km.fit(X)
-        inertias.append(km.inertia_)
-
-    # Find elbow: largest drop in inertia
-    if len(inertias) < 3:
-        return len(inertias)
-
-    diffs = [inertias[i] - inertias[i + 1] for i in range(len(inertias) - 1)]
-    best_k = diffs.index(max(diffs)) + 2  # +2 because we start from k=1
-    return min(best_k, max_k)
+    logger.info(f"Found {len(layout_groups)} layout groups from {len(slides)} slides")
+    for g in layout_groups:
+        logger.debug(
+            f"  Group {g['group_id']}: {g['layout_type']} "
+            f"slides={g['slide_indices']} representative={g['representative_index']}"
+        )
+    return layout_groups
 
 
 def _make_layout_group(
@@ -117,28 +57,28 @@ def _make_layout_group(
 ) -> dict[str, Any]:
     """Build a layout group descriptor from a set of slide indices."""
     if not slide_indices:
-        return {"group_id": group_id, "slide_indices": [], "layout_types": [], "representative_index": 0}
+        return {"group_id": group_id, "slide_indices": [], "layout_type": "content", "representative_index": 0}
 
-    # Find most common layout type
     layout_types = [slides[i]["layout_type"] for i in slide_indices]
     dominant_type = max(set(layout_types), key=layout_types.count)
 
-    # Representative slide is the first one with the dominant type
+    # Representative: first slide whose layout_type matches the dominant type
     representative = next(
         (i for i in slide_indices if slides[i]["layout_type"] == dominant_type),
         slide_indices[0],
     )
 
-    # Collect all placeholder types in this group
-    all_placeholders = []
+    # Collect placeholder info from the representative slide
     rep_slide = slides[representative]
-    for ph in rep_slide.get("placeholders", []):
-        all_placeholders.append({
+    all_placeholders = [
+        {
             "idx": ph["idx"],
             "type": ph["type"],
             "position": ph["position"],
             "font": ph.get("font", {}),
-        })
+        }
+        for ph in rep_slide.get("placeholders", [])
+    ]
 
     return {
         "group_id": group_id,
@@ -152,35 +92,17 @@ def _make_layout_group(
 
 
 def _describe_layout(layout_type: str, placeholders: list[dict]) -> str:
-    """Generate a human-readable layout description."""
-    ph_types = [p["type"] for p in placeholders]
-
     descriptions = {
         "title_slide": "Title slide with large centered title and subtitle",
-        "section_header": "Section header with title only",
-        "content": "Standard content slide with title and body text",
+        "section_header": "Section header/divider slide — use ONLY for major topic transitions",
+        "content": "Standard content slide with title and body text — use for most slides",
         "two_column": "Two-column layout with title and dual content areas",
         "image_left": "Image on left with title and text on right",
         "image_right": "Title and text on left with image on right",
         "image_only": "Full-slide image layout",
         "blank": "Blank slide with no placeholders",
     }
-
+    ph_types = [p["type"] for p in placeholders]
     base = descriptions.get(layout_type, f"Custom layout: {layout_type}")
     ph_summary = ", ".join(sorted(set(ph_types)))
     return f"{base} [placeholders: {ph_summary}]"
-
-
-def _group_by_layout_type(slides: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Fallback grouping by layout type string."""
-    groups: dict[str, list[int]] = {}
-    for i, slide in enumerate(slides):
-        lt = slide.get("layout_type", "unknown")
-        groups.setdefault(lt, []).append(i)
-
-    layout_groups = []
-    for gid, (lt, indices) in enumerate(groups.items()):
-        group = _make_layout_group(gid, indices, slides)
-        layout_groups.append(group)
-
-    return layout_groups
