@@ -3,8 +3,11 @@ Slide builder: builds the final PPTX by adding clean slides from template layout
 
 Uses prs.slides.add_slide(layout) instead of cloning, which avoids template-text
 contamination ("Section Title", "First bullet point..." bleeding into every slide).
+After creating each clean slide, decorative shapes (backgrounds, accent bars, etc.)
+are copied from a representative template slide so the visual design is preserved.
 """
 
+import copy
 import shutil
 from pathlib import Path
 from typing import Any, Callable
@@ -40,6 +43,10 @@ def build_presentation(
     shutil.copy2(str(template_path), str(output_path))
     prs = Presentation(str(output_path))
 
+    # Capture design references from template slides BEFORE adding new slides
+    design_map = _build_design_map(prs, template_schema)
+    logger.info(f"Design map: {list(design_map.keys())}")
+
     layout_map = _build_layout_map(prs)
     logger.info(f"Layout map: {list(layout_map.keys())}")
 
@@ -73,6 +80,12 @@ def build_presentation(
 
         layout = layout_map.get(layout_type) or content_layout
         new_slide = prs.slides.add_slide(layout)
+
+        # Copy visual design (background + decorative shapes) from template reference
+        ref_slide = design_map.get(layout_type) or design_map.get("content")
+        if ref_slide:
+            _apply_design(new_slide, ref_slide)
+
         _populate_slide(new_slide, slide_spec, prs.slide_width, prs.slide_height)
 
         issues = validate_page(new_slide, i)
@@ -130,6 +143,55 @@ def _build_layout_map(prs: Presentation) -> dict[str, Any]:
             layout_map["title_only"] = layout
 
     return layout_map
+
+
+def _build_design_map(prs: Presentation, template_schema: dict[str, Any]) -> dict[str, Any]:
+    """Map layout_type → first representative template slide (used as visual design reference)."""
+    design_map: dict[str, Any] = {}
+    for slide_data in template_schema.get("slides", []):
+        layout_type = slide_data.get("layout_type", "content")
+        if layout_type not in design_map:
+            idx = slide_data.get("index", -1)
+            if 0 <= idx < len(prs.slides):
+                design_map[layout_type] = prs.slides[idx]
+    return design_map
+
+
+# Shape types to skip when copying decorative elements: text boxes and pictures
+_SKIP_SHAPE_TYPES = {13, 17}  # 13=PICTURE, 17=TEXT_BOX
+
+
+def _apply_design(new_slide, ref_slide) -> None:
+    """Copy background fill and non-text decorative shapes from ref_slide to new_slide.
+
+    Copies rectangle/auto-shape/line elements (accent bars, background blocks) but
+    skips placeholders and text boxes so template copy-text can never bleed through.
+    Shapes are inserted before the layout's placeholder elements so they render behind text.
+    """
+    # --- Background fill ---
+    try:
+        src_fill = ref_slide.background.fill
+        if src_fill.type is not None:
+            dst_fill = new_slide.background.fill
+            dst_fill.solid()
+            dst_fill.fore_color.rgb = src_fill.fore_color.rgb
+    except Exception:
+        pass
+
+    # --- Decorative shapes ---
+    sp_tree = new_slide.shapes._spTree
+    insert_pos = 2  # after nvGrpSpPr and grpSpPr, before existing placeholders
+
+    for shape in ref_slide.shapes:
+        if shape.is_placeholder:
+            continue
+        if shape.shape_type in _SKIP_SHAPE_TYPES:
+            continue
+        try:
+            sp_tree.insert(insert_pos, copy.deepcopy(shape.element))
+            insert_pos += 1
+        except Exception:
+            pass
 
 
 def _remove_slide(prs: Presentation, index: int) -> None:
